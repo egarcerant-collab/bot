@@ -1,40 +1,62 @@
 /**
  * sheets_reader.js
- * Lee el Google Sheet público (alimentado por el Apps Script de Auditoria)
- * y expone funciones para analítica y búsqueda por cédula.
+ * Lee el Google Sheet alimentado por el Apps Script de Auditoría Hospitalaria.
  *
- * Sheet ID: 1BvYBlquNuIbRyvDE-Ej5KbHv9zyVCaa2
- * El Apps Script escribe los datos en la hoja "DATOS" o "POWEBI" (primera hoja).
+ * Columnas conocidas del sheet (fila 1):
+ * IPS | Nombre Paciente | Tipo Identificacion | Numero Identificacion | Edad |
+ * IPS Primaria | Sexo | Departamento | Municipio | Dirección | Teléfonos |
+ * Correo Electrónico | Fecha Ingreso | Fecha Egreso | Estancia | Diagnostico |
+ * Cie10 Diagnostico | Servicio | IPS Remite | Especialidad | Estado | Auditor |
+ * Cie10 Egreso | Estado del Egreso | Destino Egreso | Eventos Adversos |
+ * Cantidad Evento no calidad | CUPS | Salud Publica | Glosas | Valor Total Glosa |
+ * Estado Ingreso | Observación Ingreso | Observación Seguimiento | Gestación |
+ * Control Prenatal | Via Parto | Dx Gestante | VDRL | Fecha Recién Nacido |
+ * Dx Recién Nacido | Peso Recién Nacido | Talla Recién Nacido |
+ * Tipo Documento Recién Nacido | Número Documento Recién Nacido |
+ * Número Gestación Recién Nacido | Fecha Última Menstruación |
+ * Fecha Problable Parto | Metodo Planificación | Reingreso | Programa Riesgo |
+ * Patologia alto costo
  */
 
 import fetch from "node-fetch";
 import * as XLSX from "xlsx";
 
-const SHEET_ID = process.env.GOOGLE_SHEET_ID || "1BvYBlquNuIbRyvDE-Ej5KbHv9zyVCaa2";
+const SHEET_ID   = process.env.GOOGLE_SHEET_ID || "1BvYBlquNuIbRyvDE-Ej5KbHv9zyVCaa2";
 const EXPORT_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=xlsx`;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Utilidades ────────────────────────────────────────────────────────────────
 
-function normalizar(s) {
-  return String(s ?? "").trim().toLowerCase()
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "");
+function topN(map, n = 8) {
+  return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
 }
 
-function detectarCol(headers, patrones) {
-  const n = s => normalizar(s);
-  for (const h of headers)
-    for (const p of patrones)
-      if (n(h).includes(n(p))) return h;
-  return null;
+function contar(rows, col) {
+  const m = new Map();
+  for (const r of rows) {
+    const v = String(r[col] ?? "").trim() || "Sin dato";
+    m.set(v, (m.get(v) || 0) + 1);
+  }
+  return m;
 }
 
-function topN(map, n = 7) {
-  return [...map.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, n);
+function sumar(rows, col) {
+  return rows.reduce((acc, r) => {
+    const v = parseFloat(String(r[col] ?? "").replace(/[^0-9.]/g, ""));
+    return acc + (isNaN(v) ? 0 : v);
+  }, 0);
 }
 
-// ── Descarga del workbook ─────────────────────────────────────────────────────
+function formatFecha(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  return isNaN(d) ? String(v) : d.toLocaleDateString("es-CO");
+}
+
+function formatMoney(n) {
+  return "$" + Math.round(n).toLocaleString("es-CO");
+}
+
+// ── Descarga workbook ─────────────────────────────────────────────────────────
 
 export async function descargarWorkbook() {
   const res = await fetch(EXPORT_URL, {
@@ -43,15 +65,15 @@ export async function descargarWorkbook() {
   });
   if (!res.ok) {
     throw new Error(
-      `No se pudo leer el Google Sheet (HTTP ${res.status}). ` +
-      `Verifica que sea público: Archivo → Compartir → "Cualquier persona con el enlace puede ver".`
+      `No se pudo leer el Google Sheet (HTTP ${res.status}).\n` +
+      `Verifica que esté compartido: Archivo → Compartir → "Cualquier persona con el enlace puede ver".`
     );
   }
   const buf = Buffer.from(await res.arrayBuffer());
   return XLSX.read(buf, { type: "buffer", cellDates: true });
 }
 
-// ── Todas las filas del Sheet (primera hoja con datos) ────────────────────────
+// ── Obtener filas (primera hoja con datos) ────────────────────────────────────
 
 export async function obtenerFilas() {
   const wb = await descargarWorkbook();
@@ -59,190 +81,311 @@ export async function obtenerFilas() {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: "" });
     if (rows.length > 0) return { rows, hoja: name };
   }
-  throw new Error("El Sheet no tiene datos. Ejecuta el Apps Script primero.");
+  throw new Error("El Sheet está vacío. Ejecuta el Apps Script para poblar los datos.");
 }
 
 // ── Analítica completa ────────────────────────────────────────────────────────
 
 export async function obtenerAnaliticaSheet() {
   const { rows, hoja } = await obtenerFilas();
-  const headers = Object.keys(rows[0]);
 
-  const colId     = detectarCol(headers, ["identificacion","cedula","nro_doc","documento","numero_id","id_paciente","numid"]);
-  const colNombre = detectarCol(headers, ["nombre","paciente","afiliado"]);
-  const colEstado = detectarCol(headers, ["estado","status","situacion"]);
-  const colTipo   = detectarCol(headers, ["tipo","modalidad","clase","internacion","hospitalizacion"]);
-  const colIP     = detectarCol(headers, ["ips","ip","sede","institucion","entidad","prestador"]);
-  const colFecha  = detectarCol(headers, ["fecha","ingreso","egreso","date"]);
-  const colDiag   = detectarCol(headers, ["diagnostico","dx","cie","diag"]);
+  // Columnas exactas del sheet
+  const C = {
+    IPS:          "IPS",
+    NOMBRE:       "Nombre Paciente",
+    TIPO_ID:      "Tipo Identificacion",
+    CEDULA:       "Numero Identificacion",
+    EDAD:         "Edad",
+    IPS_PRIM:     "IPS Primaria",
+    SEXO:         "Sexo",
+    DPTO:         "Departamento",
+    MUNICIPIO:    "Municipio",
+    FECHA_ING:    "Fecha Ingreso",
+    FECHA_EGR:    "Fecha Egreso",
+    ESTANCIA:     "Estancia",
+    DIAGNOSTICO:  "Diagnostico",
+    CIE10:        "Cie10 Diagnostico",
+    SERVICIO:     "Servicio",
+    ESPECIALIDAD: "Especialidad",
+    ESTADO:       "Estado",
+    AUDITOR:      "Auditor",
+    ESTADO_EGR:   "Estado del Egreso",
+    DESTINO_EGR:  "Destino Egreso",
+    EVENTOS_ADV:  "Eventos Adversos",
+    GLOSAS:       "Glosas",
+    VALOR_GLOSA:  "Valor Total Glosa",
+    ESTADO_ING:   "Estado Ingreso",
+    REINGRESO:    "Reingreso",
+    PROG_RIESGO:  "Programa Riesgo",
+    ALTO_COSTO:   "Patologia alto costo",
+    GESTACION:    "Gestación",
+    VIA_PARTO:    "Via Parto",
+    SALUD_PUB:    "Salud Publica",
+  };
 
-  // Conteos
-  const estadoMap = new Map(), tipoMap = new Map(), ipMap = new Map(), diagMap = new Map();
-  const ipUsuarios = new Map(); // ip → Set de cédulas
+  const total = rows.length;
+
+  // Usuarios únicos por cédula
+  const usuariosUnicos = new Set(rows.map(r => String(r[C.CEDULA]).trim()).filter(Boolean)).size;
+
+  // Estados de auditoría
+  const estadoMap = contar(rows, C.ESTADO);
   let abiertas = 0, cerradas = 0;
-
-  for (const row of rows) {
-    const estado = String(row[colEstado] ?? "").trim();
-    const tipo   = String(row[colTipo]   ?? "Sin tipo").trim() || "Sin tipo";
-    const ip     = String(row[colIP]     ?? "Sin IP").trim()   || "Sin IP";
-    const diag   = String(row[colDiag]   ?? "").trim();
-    const id     = String(row[colId]     ?? "").trim();
-
-    if (estado) estadoMap.set(estado, (estadoMap.get(estado) || 0) + 1);
-    tipoMap.set(tipo, (tipoMap.get(tipo) || 0) + 1);
-    ipMap.set(ip,   (ipMap.get(ip)   || 0) + 1);
-    if (diag) diagMap.set(diag, (diagMap.get(diag) || 0) + 1);
-
-    if (ip && id) {
-      if (!ipUsuarios.has(ip)) ipUsuarios.set(ip, new Set());
-      ipUsuarios.get(ip).add(id);
-    }
-
-    const en = normalizar(estado);
-    if (en.includes("abiert") || en.includes("activ") || en.includes("pend")) abiertas++;
-    else if (en.includes("cerrad") || en.includes("finaliz") || en.includes("complet")) cerradas++;
+  for (const [k, v] of estadoMap) {
+    const kn = k.toLowerCase();
+    if (kn.includes("abiert") || kn.includes("activ") || kn.includes("pend") || kn.includes("proceso"))
+      abiertas += v;
+    else if (kn.includes("cerrad") || kn.includes("finaliz") || kn.includes("complet") || kn.includes("egres"))
+      cerradas += v;
   }
 
-  // Usuarios únicos
-  const usuariosUnicos = colId
-    ? new Set(rows.map(r => String(r[colId]).trim()).filter(Boolean)).size
-    : null;
+  // Servicios / tipos de internación
+  const servicioMap = contar(rows, C.SERVICIO);
 
-  // Rango fechas
-  let fechaMin = null, fechaMax = null;
-  if (colFecha) {
-    const fechas = rows.map(r => { const d = new Date(r[colFecha]); return isNaN(d) ? null : d; }).filter(Boolean);
-    if (fechas.length) {
-      fechaMin = new Date(Math.min(...fechas)).toLocaleDateString("es-CO");
-      fechaMax = new Date(Math.max(...fechas)).toLocaleDateString("es-CO");
-    }
+  // IPS con más usuarios únicos
+  const ipUsuarios = new Map();
+  for (const r of rows) {
+    const ip  = String(r[C.IPS] ?? "").trim()    || "Sin IPS";
+    const ced = String(r[C.CEDULA] ?? "").trim();
+    if (!ipUsuarios.has(ip)) ipUsuarios.set(ip, new Set());
+    if (ced) ipUsuarios.get(ip).add(ced);
   }
-
-  // IP con más usuarios únicos
   const ipUsrMap = new Map([...ipUsuarios.entries()].map(([k, v]) => [k, v.size]));
 
+  // Diagnósticos más frecuentes
+  const diagMap = contar(rows, C.DIAGNOSTICO);
+
+  // Especialidades
+  const espMap = contar(rows, C.ESPECIALIDAD);
+
+  // Glosas
+  const conGlosa    = rows.filter(r => String(r[C.GLOSAS] ?? "").trim().toLowerCase() === "si" ||
+                                        String(r[C.GLOSAS] ?? "").trim() === "1" ||
+                                        parseFloat(r[C.VALOR_GLOSA]) > 0).length;
+  const totalGlosa  = sumar(rows, C.VALOR_GLOSA);
+
+  // Reingresos
+  const reingresos  = rows.filter(r => String(r[C.REINGRESO] ?? "").trim().toLowerCase() === "si" ||
+                                        String(r[C.REINGRESO] ?? "").trim() === "1").length;
+
+  // Programas de riesgo
+  const riesgoMap   = contar(rows, C.PROG_RIESGO);
+
+  // Patología alto costo
+  const altoCostoMap = contar(rows, C.ALTO_COSTO);
+
+  // Eventos adversos
+  const eventosAdv  = rows.filter(r => String(r[C.EVENTOS_ADV] ?? "").trim() !== "" &&
+                                        String(r[C.EVENTOS_ADV] ?? "").trim().toLowerCase() !== "no" &&
+                                        String(r[C.EVENTOS_ADV] ?? "").trim() !== "0").length;
+
+  // Rango de fechas
+  let fechaMin = null, fechaMax = null;
+  const fechas = rows.map(r => { const d = new Date(r[C.FECHA_ING]); return isNaN(d) ? null : d; }).filter(Boolean);
+  if (fechas.length) {
+    fechaMin = new Date(Math.min(...fechas)).toLocaleDateString("es-CO");
+    fechaMax = new Date(Math.max(...fechas)).toLocaleDateString("es-CO");
+  }
+
+  // Sexo
+  const sexoMap = contar(rows, C.SEXO);
+
+  // Auditor con más casos
+  const auditorMap = contar(rows, C.AUDITOR);
+
   return {
-    hoja, total: rows.length, usuariosUnicos,
-    abiertas, cerradas, estadoMap, tipoMap,
-    ipMap, ipUsrMap, diagMap,
+    hoja, total, usuariosUnicos,
+    abiertas, cerradas, estadoMap,
+    servicioMap, ipUsrMap, ipUsuarios,
+    diagMap, espMap, riesgoMap, altoCostoMap, sexoMap, auditorMap,
+    conGlosa, totalGlosa, reingresos, eventosAdv,
     fechaMin, fechaMax,
-    colsDetectadas: { colId, colNombre, colEstado, colTipo, colIP, colFecha, colDiag },
   };
 }
 
-// ── Formatear reporte analítica ───────────────────────────────────────────────
+// ── Formatear reporte ─────────────────────────────────────────────────────────
 
-export function formatearAnalitica(a, fuente = "Google Sheet") {
-  const lineas = [
-    `📊 *ANALÍTICA — AUDITORÍA HOSPITALARIA*`,
-    `🔗 Fuente: ${fuente}  •  Hoja: \`${a.hoja}\``,
-    `🕐 ${new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" })}`,
-    ``,
-    `📌 *Resumen*`,
-    `  • Total registros: *${a.total.toLocaleString()}*`,
-  ];
-  if (a.usuariosUnicos) lineas.push(`  • Usuarios/pacientes únicos: *${a.usuariosUnicos.toLocaleString()}*`);
-  if (a.fechaMin)       lineas.push(`  • Período: ${a.fechaMin} → ${a.fechaMax}`);
+export function formatearAnalitica(a) {
+  const pct = (n) => ((n / a.total) * 100).toFixed(1) + "%";
+  const L = [];
 
-  if (a.abiertas || a.cerradas) {
-    lineas.push(``, `🔓 *Estado de Auditorías*`);
-    if (a.abiertas) lineas.push(`  • Abiertas / Activas: *${a.abiertas}*`);
-    if (a.cerradas) lineas.push(`  • Cerradas / Finalizadas: *${a.cerradas}*`);
-    const otros = a.total - a.abiertas - a.cerradas;
-    if (otros > 0) lineas.push(`  • Otros estados: ${otros}`);
-  } else if (a.estadoMap.size) {
-    lineas.push(``, `🔓 *Estados*`);
-    for (const [k, v] of topN(a.estadoMap, 8))
-      lineas.push(`  • ${k}: *${v}*`);
-  }
+  L.push(`📊 *ANALÍTICA — AUDITORÍA HOSPITALARIA*`);
+  L.push(`📅 Período: ${a.fechaMin || "?"} → ${a.fechaMax || "?"}`);
+  L.push(`🕐 ${new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" })}`);
+  L.push(``);
+  L.push(`📌 *Resumen General*`);
+  L.push(`  • Total registros: *${a.total.toLocaleString()}*`);
+  L.push(`  • Usuarios únicos: *${a.usuariosUnicos.toLocaleString()}*`);
 
-  if (a.tipoMap.size) {
-    lineas.push(``, `🏥 *Tipos de Internación*`);
-    for (const [k, v] of topN(a.tipoMap, 10)) {
-      const pct = ((v / a.total) * 100).toFixed(1);
-      lineas.push(`  • ${k}: *${v}* (${pct}%)`);
+  // Estados
+  L.push(``);
+  L.push(`🔓 *Estado de Auditorías*`);
+  L.push(`  • Abiertas / En proceso: *${a.abiertas}* (${pct(a.abiertas)})`);
+  L.push(`  • Cerradas / Egresados: *${a.cerradas}* (${pct(a.cerradas)})`);
+  if (a.total - a.abiertas - a.cerradas > 0) {
+    for (const [k, v] of topN(a.estadoMap, 6)) {
+      const kn = k.toLowerCase();
+      const yaContado = kn.includes("abiert")||kn.includes("activ")||kn.includes("pend")||
+                        kn.includes("proceso")||kn.includes("cerrad")||kn.includes("finaliz")||
+                        kn.includes("complet")||kn.includes("egres");
+      if (!yaContado && k !== "Sin dato") L.push(`  • ${k}: ${v}`);
     }
   }
 
-  if (a.ipUsrMap.size) {
-    lineas.push(``, `🏢 *IPs / Sedes — usuarios únicos*`);
-    for (const [k, v] of topN(a.ipUsrMap, 7))
-      lineas.push(`  • ${k}: *${v}*`);
-  } else if (a.ipMap.size) {
-    lineas.push(``, `🏢 *IPs / Sedes*`);
-    for (const [k, v] of topN(a.ipMap, 7))
-      lineas.push(`  • ${k}: *${v}*`);
+  // Servicios
+  if (a.servicioMap.size) {
+    L.push(``);
+    L.push(`🏥 *Servicios / Tipos de Internación*`);
+    for (const [k, v] of topN(a.servicioMap, 8))
+      L.push(`  • ${k}: *${v}* (${pct(v)})`);
   }
 
+  // IPS con más usuarios
+  L.push(``);
+  L.push(`🏢 *IPS con más usuarios únicos*`);
+  for (const [k, v] of topN(a.ipUsrMap, 7))
+    L.push(`  • ${k}: *${v}*`);
+
+  // Especialidades
+  if (a.espMap.size) {
+    L.push(``);
+    L.push(`👨‍⚕️ *Top Especialidades*`);
+    for (const [k, v] of topN(a.espMap, 5))
+      L.push(`  • ${k}: *${v}*`);
+  }
+
+  // Diagnósticos
   if (a.diagMap.size) {
-    lineas.push(``, `🔬 *Top Diagnósticos*`);
+    L.push(``);
+    L.push(`🔬 *Top Diagnósticos*`);
     for (const [k, v] of topN(a.diagMap, 5))
-      lineas.push(`  • ${k}: *${v}*`);
+      L.push(`  • ${k}: *${v}*`);
   }
 
-  return lineas.join("\n");
+  // Alertas clínicas
+  L.push(``);
+  L.push(`⚠️ *Alertas Clínicas*`);
+  L.push(`  • Reingresos: *${a.reingresos}* (${pct(a.reingresos)})`);
+  L.push(`  • Eventos adversos: *${a.eventosAdv}*`);
+  if (a.conGlosa > 0) {
+    L.push(`  • Con glosa: *${a.conGlosa}* (${pct(a.conGlosa)})`);
+    if (a.totalGlosa > 0) L.push(`  • Valor total glosas: *${formatMoney(a.totalGlosa)}*`);
+  }
+
+  // Programas de riesgo
+  const riesgoFiltrado = [...a.riesgoMap.entries()].filter(([k]) => k !== "Sin dato" && k !== "");
+  if (riesgoFiltrado.length) {
+    L.push(``);
+    L.push(`🎯 *Programas de Riesgo*`);
+    for (const [k, v] of riesgoFiltrado.sort((a,b)=>b[1]-a[1]).slice(0,5))
+      L.push(`  • ${k}: *${v}*`);
+  }
+
+  // Patología alto costo
+  const acFiltrado = [...a.altoCostoMap.entries()].filter(([k]) => k !== "Sin dato" && k !== "" && k.toLowerCase() !== "no");
+  if (acFiltrado.length) {
+    L.push(``);
+    L.push(`💊 *Patología Alto Costo*`);
+    for (const [k, v] of acFiltrado.sort((a,b)=>b[1]-a[1]).slice(0,5))
+      L.push(`  • ${k}: *${v}*`);
+  }
+
+  return L.join("\n");
 }
 
 // ── Búsqueda por cédula ───────────────────────────────────────────────────────
 
 export async function buscarPorCedula(cedula) {
   const { rows, hoja } = await obtenerFilas();
-  const headers = Object.keys(rows[0]);
 
-  const colId     = detectarCol(headers, ["identificacion","cedula","nro_doc","documento","numero_id","id_paciente","numid"]);
-  const colNombre = detectarCol(headers, ["nombre","paciente","afiliado"]);
-  const colEstado = detectarCol(headers, ["estado","status","situacion"]);
-  const colTipo   = detectarCol(headers, ["tipo","modalidad","clase","internacion","hospitalizacion"]);
-  const colIP     = detectarCol(headers, ["ips","ip","sede","institucion","entidad","prestador"]);
-  const colFecha  = detectarCol(headers, ["fecha","ingreso","egreso","date"]);
-  const colDiag   = detectarCol(headers, ["diagnostico","dx","cie","diag"]);
+  const encontradas = rows.filter(r =>
+    String(r["Numero Identificacion"] ?? "").trim() === cedula.trim()
+  );
 
-  // Buscar filas donde aparezca la cédula (en cualquier columna de ID o en toda la fila)
-  const encontradas = rows.filter(row => {
-    if (colId) return String(row[colId]).trim() === cedula;
-    // Fallback: buscar en todos los campos
-    return Object.values(row).some(v => String(v).trim() === cedula);
-  });
-
-  return { encontradas, hoja, colNombre, colEstado, colTipo, colIP, colFecha, colDiag };
+  return { encontradas, hoja };
 }
 
-// ── Formatear evolución de un paciente ───────────────────────────────────────
+// ── Formatear evolución del paciente ─────────────────────────────────────────
 
 export function formatearEvolucion(cedula, resultado) {
-  const { encontradas, colNombre, colEstado, colTipo, colIP, colFecha, colDiag } = resultado;
+  const { encontradas } = resultado;
 
   if (encontradas.length === 0) {
-    return `🔍 No se encontraron registros para la cédula *${cedula}* en el último reporte.\n\n_Verifica que el número sea correcto o actualiza el reporte con /descargar._`;
+    return (
+      `🔍 No se encontraron registros para la cédula *${cedula}*.\n\n` +
+      `_Verifica el número o usa /descargar para actualizar el reporte._`
+    );
   }
 
-  const nombre = colNombre ? String(encontradas[0][colNombre] || "").trim() : "";
-  const lineas = [
-    `👤 *Evolución del Concurrente*`,
-    nombre ? `  Paciente: *${nombre}*` : "",
-    `  Cédula: \`${cedula}\``,
-    `  Registros encontrados: *${encontradas.length}*`,
-    ``,
-  ].filter(l => l !== "");
+  const p        = encontradas[0];
+  const nombre   = String(p["Nombre Paciente"] ?? "").trim();
+  const edad     = String(p["Edad"] ?? "").trim();
+  const sexo     = String(p["Sexo"] ?? "").trim();
+  const programa = String(p["Programa Riesgo"] ?? "").trim();
+  const altoCosto = String(p["Patologia alto costo"] ?? "").trim();
 
-  // Ordenar por fecha si existe
-  let registros = [...encontradas];
-  if (colFecha) {
-    registros.sort((a, b) => {
-      const da = new Date(a[colFecha]), db = new Date(b[colFecha]);
-      return (isNaN(da) ? 0 : da) - (isNaN(db) ? 0 : db);
-    });
-  }
+  const L = [];
+  L.push(`👤 *Evolución del Concurrente*`);
+  if (nombre) L.push(`  Paciente: *${nombre}*`);
+  L.push(`  Cédula: \`${cedula}\``);
+  if (edad)  L.push(`  Edad: ${edad} años  |  Sexo: ${sexo}`);
+  if (programa && programa !== "" && programa.toLowerCase() !== "sin dato")
+    L.push(`  Programa Riesgo: ${programa}`);
+  if (altoCosto && altoCosto !== "" && altoCosto.toLowerCase() !== "no" && altoCosto.toLowerCase() !== "sin dato")
+    L.push(`  Alto Costo: ${altoCosto}`);
+  L.push(`  Total registros: *${encontradas.length}*`);
+  L.push(``);
 
-  registros.forEach((row, i) => {
-    lineas.push(`*Registro ${i + 1}*`);
-    if (colFecha  && row[colFecha])  lineas.push(`  📅 Fecha: ${new Date(row[colFecha]).toLocaleDateString("es-CO")}`);
-    if (colTipo   && row[colTipo])   lineas.push(`  🏥 Tipo: ${row[colTipo]}`);
-    if (colEstado && row[colEstado]) lineas.push(`  🔖 Estado: ${row[colEstado]}`);
-    if (colIP     && row[colIP])     lineas.push(`  🏢 IPS: ${row[colIP]}`);
-    if (colDiag   && row[colDiag])   lineas.push(`  🔬 Dx: ${row[colDiag]}`);
-    lineas.push("");
+  // Ordenar por fecha de ingreso
+  const registros = [...encontradas].sort((a, b) => {
+    const da = new Date(a["Fecha Ingreso"]), db = new Date(b["Fecha Ingreso"]);
+    return (isNaN(da) ? 0 : da.getTime()) - (isNaN(db) ? 0 : db.getTime());
   });
 
-  return lineas.join("\n").trim();
+  registros.forEach((r, i) => {
+    L.push(`*── Registro ${i + 1} ──*`);
+
+    const ips       = String(r["IPS"] ?? "").trim();
+    const ipsPrim   = String(r["IPS Primaria"] ?? "").trim();
+    const fIngreso  = formatFecha(r["Fecha Ingreso"]);
+    const fEgreso   = formatFecha(r["Fecha Egreso"]);
+    const estancia  = String(r["Estancia"] ?? "").trim();
+    const servicio  = String(r["Servicio"] ?? "").trim();
+    const esp       = String(r["Especialidad"] ?? "").trim();
+    const diag      = String(r["Diagnostico"] ?? "").trim();
+    const cie10     = String(r["Cie10 Diagnostico"] ?? "").trim();
+    const estado    = String(r["Estado"] ?? "").trim();
+    const estadoEgr = String(r["Estado del Egreso"] ?? "").trim();
+    const destino   = String(r["Destino Egreso"] ?? "").trim();
+    const auditor   = String(r["Auditor"] ?? "").trim();
+    const reingreso = String(r["Reingreso"] ?? "").trim();
+    const glosa     = String(r["Glosas"] ?? "").trim();
+    const valGlosa  = parseFloat(String(r["Valor Total Glosa"] ?? "").replace(/[^0-9.]/g, ""));
+    const evAdv     = String(r["Eventos Adversos"] ?? "").trim();
+    const obsIng    = String(r["Observación Ingreso"] ?? "").trim();
+    const obsSeg    = String(r["Observación Seguimiento"] ?? "").trim();
+    const estadoIng = String(r["Estado Ingreso"] ?? "").trim();
+
+    if (ips)       L.push(`  🏥 IPS: ${ips}`);
+    if (ipsPrim && ipsPrim !== ips) L.push(`  🏥 IPS Primaria: ${ipsPrim}`);
+    if (fIngreso)  L.push(`  📅 Ingreso: ${fIngreso}${fEgreso ? "  →  Egreso: " + fEgreso : "  *(en curso)*"}`);
+    if (estancia)  L.push(`  ⏱ Estancia: ${estancia} días`);
+    if (servicio)  L.push(`  🔧 Servicio: ${servicio}`);
+    if (esp)       L.push(`  👨‍⚕️ Especialidad: ${esp}`);
+    if (diag)      L.push(`  🔬 Diagnóstico: ${diag}${cie10 ? " (" + cie10 + ")" : ""}`);
+    if (estado)    L.push(`  🔖 Estado auditoría: *${estado}*`);
+    if (estadoIng) L.push(`  🔖 Estado ingreso: ${estadoIng}`);
+    if (estadoEgr) L.push(`  🚪 Estado egreso: ${estadoEgr}${destino ? " → " + destino : ""}`);
+    if (auditor)   L.push(`  👤 Auditor: ${auditor}`);
+    if (reingreso.toLowerCase() === "si" || reingreso === "1") L.push(`  🔄 *REINGRESO*`);
+    if ((glosa.toLowerCase() === "si" || glosa === "1") && !isNaN(valGlosa) && valGlosa > 0)
+      L.push(`  💰 Glosa: ${formatMoney(valGlosa)}`);
+    if (evAdv && evAdv !== "" && evAdv.toLowerCase() !== "no" && evAdv !== "0")
+      L.push(`  ⚠️ Evento adverso: ${evAdv}`);
+    if (obsIng)    L.push(`  📝 Obs. Ingreso: _${obsIng}_`);
+    if (obsSeg)    L.push(`  📝 Obs. Seguimiento: _${obsSeg}_`);
+    L.push(``);
+  });
+
+  return L.join("\n").trim();
 }
