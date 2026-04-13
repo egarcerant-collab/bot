@@ -9,6 +9,7 @@ import https from "https";
 import { Readable } from "stream";
 import cron from "node-cron";
 import { descargarAuditoria } from "./descarga_auditoria.js";
+import { obtenerAnalitica, formatearReporte } from "./analytics_auditoria.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -33,9 +34,14 @@ const histories = new Map();   // userId -> [{role, content}]
 const processing = new Set();  // userId -> true if currently processing (concurrency guard)
 
 const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT ||
-  "Eres un asistente de voz inteligente y amigable. " +
-  "Responde de manera concisa y natural, como si estuvieras hablando con alguien. " +
-  "Mantén las respuestas breves para que sean cómodas de escuchar.";
+  "Eres un asistente inteligente especializado en analítica de auditoría hospitalaria para Dusakawi EPSI. " +
+  "Tienes acceso a reportes de auditoría hospitalaria que incluyen datos de usuarios, tipos de internación, " +
+  "estados de auditoría (abierta/cerrada), IPs/sedes, diagnósticos y fechas. " +
+  "Cuando el usuario te pregunte sobre datos, estadísticas o analítica, interpreta los reportes que se te comparten " +
+  "y responde con análisis claros, concisos y útiles. " +
+  "Si el usuario habla por voz, responde de forma natural y conversacional. " +
+  "Si responde por texto, puedes ser más detallado. " +
+  "Siempre responde en español.";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -106,6 +112,45 @@ async function synthesizeSpeech(text) {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
+// ── Analítica ─────────────────────────────────────────────────────────────────
+
+async function ejecutarAnalitica(chatId) {
+  try {
+    await bot.telegram.sendMessage(chatId,
+      "🔍 Analizando último reporte de auditoría...",
+      { parse_mode: "Markdown" }
+    );
+    const { analytics, archivoNombre } = await obtenerAnalitica();
+    const reporte = formatearReporte(analytics, archivoNombre);
+
+    // Telegram tiene límite de 4096 chars por mensaje
+    if (reporte.length <= 4096) {
+      await bot.telegram.sendMessage(chatId, reporte, { parse_mode: "Markdown" });
+    } else {
+      // Partir en bloques respetando límite
+      const partes = [];
+      let bloque = "";
+      for (const linea of reporte.split("\n")) {
+        if ((bloque + linea + "\n").length > 4000) {
+          partes.push(bloque);
+          bloque = "";
+        }
+        bloque += linea + "\n";
+      }
+      if (bloque) partes.push(bloque);
+      for (const parte of partes) {
+        await bot.telegram.sendMessage(chatId, parte, { parse_mode: "Markdown" });
+      }
+    }
+  } catch (err) {
+    console.error("Error en analítica:", err.message);
+    await bot.telegram.sendMessage(chatId,
+      `❌ Error al generar analítica:\n\`${err.message}\``,
+      { parse_mode: "Markdown" }
+    );
+  }
+}
+
 // ── Descarga de Auditoría ─────────────────────────────────────────────────────
 
 let descargaEnCurso = false;
@@ -131,11 +176,15 @@ async function ejecutarDescarga(chatId) {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [[
-            { text: "🔄 Volver a descargar", callback_data: "redownload" }
+            { text: "🔄 Volver a descargar", callback_data: "redownload" },
+            { text: "📊 Ver analítica", callback_data: "ver_analitica" },
           ]]
         }
       }
     );
+
+    // Generar analítica automáticamente después de la descarga
+    await ejecutarAnalitica(chatId);
   } catch (err) {
     console.error("Error en descarga:", err.message);
     await bot.telegram.sendMessage(chatId,
@@ -158,12 +207,13 @@ async function ejecutarDescarga(chatId) {
 
 bot.command("start", (ctx) => {
   ctx.reply(
-    "👋 ¡Hola! Soy tu asistente de voz con IA.\n\n" +
+    "👋 ¡Hola! Soy el asistente de *Auditoría Hospitalaria Dusakawi*.\n\n" +
     "🎤 Envíame un *mensaje de voz* y te responderé con voz.\n" +
-    "💬 También puedo responder texto.\n\n" +
+    "💬 También puedo responder texto y analizar datos.\n\n" +
     "Comandos:\n" +
-    "/clear — Limpiar historial\n" +
+    "/analitica — Ver analítica completa del último reporte\n" +
     "/descargar — Descargar reporte de auditoría ahora\n" +
+    "/clear — Limpiar historial\n" +
     "/miid — Ver tu Chat ID",
     { parse_mode: "Markdown" }
   );
@@ -171,9 +221,16 @@ bot.command("start", (ctx) => {
 
 bot.command("help", (ctx) => {
   ctx.reply(
-    "🤖 *Asistente de Voz IA*\n\n" +
-    "• Envíame audio → transcribo con Deepgram → respondo con Claude → te mando voz\n\n" +
-    "Comandos:\n/start — Bienvenida\n/clear — Borrar historial\n/descargar — Descargar reporte ahora\n/miid — Ver tu Chat ID\n/help — Ayuda",
+    "🤖 *Asistente Auditoría Hospitalaria Dusakawi*\n\n" +
+    "• Envíame audio → transcribo con Deepgram → respondo con Claude → te mando voz\n" +
+    "• Pregúntame sobre los datos del último reporte de auditoría\n\n" +
+    "Comandos:\n" +
+    "/analitica — Analítica completa del último reporte\n" +
+    "/descargar — Descargar reporte ahora y generar analítica\n" +
+    "/start — Bienvenida\n" +
+    "/clear — Borrar historial\n" +
+    "/miid — Ver tu Chat ID\n" +
+    "/help — Ayuda",
     { parse_mode: "Markdown" }
   );
 });
@@ -191,9 +248,18 @@ bot.command("descargar", async (ctx) => {
   await ejecutarDescarga(ctx.chat.id);
 });
 
+bot.command("analitica", async (ctx) => {
+  await ejecutarAnalitica(ctx.chat.id);
+});
+
 bot.action("redownload", async (ctx) => {
   await ctx.answerCbQuery("Iniciando descarga...");
   await ejecutarDescarga(ctx.chat.id);
+});
+
+bot.action("ver_analitica", async (ctx) => {
+  await ctx.answerCbQuery("Generando analítica...");
+  await ejecutarAnalitica(ctx.chat.id);
 });
 
 bot.on("voice", async (ctx) => {
