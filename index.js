@@ -16,6 +16,8 @@ import {
   formatearAnalitica,
   buscarPorCedula,
   formatearEvolucion,
+  obtenerAuditoriasAbiertas,
+  formatearListaAbiertos,
 } from "./sheets_reader.js";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -180,16 +182,15 @@ async function ejecutarAnalitica(chatId) {
 // ── Comandos ──────────────────────────────────────────────────────────────────
 
 bot.command("start", ctx => ctx.reply(
-  "👋 *Asistente de Auditoría Hospitalaria — Dusakawi EPSI*\n\n" +
-  "🎤 Envíame un *mensaje de voz* y te respondo con voz.\n" +
-  "💬 También respondo texto y analizo datos.\n\n" +
-  "*Comandos:*\n" +
-  "/analitica — Analítica del último reporte (Google Sheet)\n" +
-  "/cedula — Buscar evolución de un paciente por cédula\n" +
-  "/descargar — Descargar reporte ahora desde el sistema\n" +
-  "/clear — Limpiar historial\n" +
-  "/miid — Ver tu Chat ID\n" +
-  "/help — Ayuda",
+  "👋 *Asistente Auditoria Hospitalaria — Dusakawi EPSI*\n\n" +
+  "Selecciona un comando:\n\n" +
+  "📊 /analitica — Analitica completa del reporte\n" +
+  "🔓 /abiertos — Pacientes con auditoria abierta\n" +
+  "🔍 /cedula 12345 — Evolucion de un paciente\n" +
+  "⬇️ /descargar — Descargar reporte del sistema\n" +
+  "🗑 /clear — Limpiar historial\n" +
+  "❓ /help — Ayuda\n\n" +
+  "🎤 Tambien puedes enviar voz o escribir una cedula directamente.",
   { parse_mode: "Markdown" }
 ));
 
@@ -222,6 +223,17 @@ bot.command("descargar", async ctx => {
 
 bot.command("analitica", async ctx => {
   await ejecutarAnalitica(ctx.chat.id);
+});
+
+bot.command("abiertos", async ctx => {
+  await ctx.reply("Cargando auditorias abiertas...");
+  try {
+    const lista   = await obtenerAuditoriasAbiertas();
+    const reporte = formatearListaAbiertos(lista);
+    await enviarMensajeLargo(ctx.chat.id, reporte);
+  } catch (err) {
+    await ctx.reply(`Error: ${err.message}`);
+  }
 });
 
 // /cedula 1067815531  O  /cedula con el número como argumento
@@ -348,12 +360,12 @@ bot.telegram.deleteWebhook({ drop_pending_updates: true })
           console.log("🤖 Bot @concurrencias_dsk_bot ACTIVO — version nueva");
           try {
             await bot.telegram.setMyCommands([
-              { command: "analitica", description: "Analitica del ultimo reporte" },
-              { command: "cedula",    description: "Buscar paciente por cedula" },
-              { command: "descargar", description: "Descargar reporte ahora" },
-              { command: "start",     description: "Iniciar el asistente" },
+              { command: "analitica", description: "Analitica completa del reporte" },
+              { command: "abiertos",  description: "Pacientes con auditoria abierta" },
+              { command: "cedula",    description: "Evolucion paciente: /cedula 12345" },
+              { command: "descargar", description: "Descargar reporte del sistema" },
+              { command: "start",     description: "Menu principal" },
               { command: "clear",     description: "Limpiar historial" },
-              { command: "miid",      description: "Ver tu Chat ID" },
               { command: "help",      description: "Ayuda" },
             ]);
             console.log("✅ Comandos registrados");

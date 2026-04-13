@@ -389,3 +389,71 @@ export function formatearEvolucion(cedula, resultado) {
 
   return L.join("\n").trim();
 }
+
+// ── Pacientes con auditorías abiertas ─────────────────────────────────────────
+
+export async function obtenerAuditoriasAbiertas() {
+  const { rows } = await obtenerFilas();
+
+  const abiertos = rows.filter(r => {
+    const estado = String(r["Estado"] ?? "").trim().toLowerCase();
+    return estado.includes("abiert") || estado.includes("activ") ||
+           estado.includes("pend")   || estado.includes("proceso") ||
+           estado.includes("seguim");
+  });
+
+  // Deduplicar por cédula — quedar con el registro más reciente
+  const porCedula = new Map();
+  for (const r of abiertos) {
+    const ced = String(r["Numero Identificacion"] ?? "").trim();
+    if (!ced) continue;
+    const existing = porCedula.get(ced);
+    if (!existing) { porCedula.set(ced, r); continue; }
+    const dNew = new Date(r["Fecha Ingreso"]);
+    const dOld = new Date(existing["Fecha Ingreso"]);
+    if (!isNaN(dNew) && (isNaN(dOld) || dNew > dOld)) porCedula.set(ced, r);
+  }
+
+  return [...porCedula.values()];
+}
+
+export function formatearListaAbiertos(lista) {
+  if (lista.length === 0)
+    return "No hay auditorias abiertas en este momento.";
+
+  const porIPS = new Map();
+  for (const r of lista) {
+    const ips = String(r["IPS"] ?? "").trim() || "Sin IPS";
+    if (!porIPS.has(ips)) porIPS.set(ips, []);
+    porIPS.get(ips).push(r);
+  }
+
+  const L = [
+    `🔓 *AUDITORIAS ABIERTAS — ${lista.length} pacientes*`,
+    `🕐 ${new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" })}`,
+    ``
+  ];
+
+  for (const [ips, pacientes] of [...porIPS.entries()].sort((a,b) => b[1].length - a[1].length)) {
+    L.push(`🏥 *${ips}* — ${pacientes.length} casos`);
+    for (const r of pacientes) {
+      const nombre  = String(r["Nombre Paciente"] ?? "").trim();
+      const cedula  = String(r["Numero Identificacion"] ?? "").trim();
+      const fIng    = formatFecha(r["Fecha Ingreso"]);
+      const servicio = String(r["Servicio"] ?? "").trim();
+      const estado  = String(r["Estado"] ?? "").trim();
+      const reingreso = String(r["Reingreso"] ?? "").trim().toLowerCase();
+      const reinTag = (reingreso === "si" || reingreso === "1") ? " 🔄" : "";
+
+      L.push(
+        `  • ${nombre || cedula}${reinTag}\n` +
+        `    \`${cedula}\`${fIng ? " · " + fIng : ""}${servicio ? " · " + servicio : ""}\n` +
+        `    _${estado}_`
+      );
+    }
+    L.push(``);
+  }
+
+  L.push(`_Usa /cedula [numero] para ver la evolucion completa_`);
+  return L.join("\n");
+}
