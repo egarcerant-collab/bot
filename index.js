@@ -338,37 +338,56 @@ cron.schedule("0 18 * * *", () => {
 
 // ── Launch ────────────────────────────────────────────────────────────────────
 
-bot.launch({ dropPendingUpdates: true }).then(async () => {
-  console.log("🤖 Bot @concurrencias_dsk_bot activo");
+async function iniciarBot() {
+  // Forzar desconexión de cualquier instancia anterior antes de arrancar
+  try {
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    console.log("🔌 Instancias anteriores desconectadas");
+  } catch (e) {
+    console.log("⚠️  deleteWebhook:", e.message);
+  }
+
+  // Esperar 3s para asegurar que la instancia vieja murió
+  await new Promise(r => setTimeout(r, 3000));
+
+  await bot.launch({ dropPendingUpdates: true });
+
+  console.log("🤖 Bot @concurrencias_dsk_bot activo — versión NUEVA");
   console.log("📅 Cron: 7:00 AM y 6:00 PM (Colombia)");
 
   try {
     await bot.telegram.setMyCommands([
-      { command: "analitica",  description: "Analítica del último reporte (Google Sheet)" },
-      { command: "cedula",     description: "Buscar paciente por cédula: /cedula 1067815531" },
-      { command: "descargar",  description: "Descargar reporte ahora desde el sistema" },
+      { command: "analitica",  description: "Analitica del ultimo reporte" },
+      { command: "cedula",     description: "Buscar paciente por cedula" },
+      { command: "descargar",  description: "Descargar reporte ahora" },
       { command: "start",      description: "Iniciar el asistente" },
-      { command: "clear",      description: "Limpiar historial de conversación" },
+      { command: "clear",      description: "Limpiar historial" },
       { command: "miid",       description: "Ver tu Chat ID" },
-      { command: "help",       description: "Mostrar ayuda" },
+      { command: "help",       description: "Ayuda" },
     ]);
     console.log("✅ Comandos registrados en Telegram");
   } catch (e) {
     console.error("⚠️  setMyCommands:", e.message);
   }
+
+  // Notificar al admin que el nuevo bot está activo
+  if (ADMIN_CHAT_ID) {
+    try {
+      await bot.telegram.sendMessage(ADMIN_CHAT_ID,
+        "✅ *Bot actualizado y activo*\n\nComandos disponibles:\n" +
+        "/analitica — Analítica Google Sheet\n" +
+        "/cedula — Buscar paciente\n" +
+        "/descargar — Descargar reporte",
+        { parse_mode: "Markdown" }
+      );
+    } catch (e) { /* sin admin configurado */ }
+  }
+}
+
+iniciarBot().catch(err => {
+  console.error("❌ Error al iniciar bot:", err.message);
+  process.exit(1);
 });
 
 process.once("SIGINT",  () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
-
-// Manejo del error 409 — reintentar tras 5s si hay conflicto de instancias
-process.on("unhandledRejection", (err) => {
-  if (err?.response?.error_code === 409) {
-    console.log("⚠️  409 Conflict — esperando 5s para reintentar...");
-    setTimeout(() => {
-      bot.launch({ dropPendingUpdates: true }).catch(() => {});
-    }, 5000);
-  } else {
-    console.error("Unhandled rejection:", err);
-  }
-});
