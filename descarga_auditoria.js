@@ -87,9 +87,13 @@ export async function descargarAuditoria({ headless = true } = {}) {
   });
 
   try {
+    // Timeout global alto para sitio lento
+    page.setDefaultNavigationTimeout(90000);
+    page.setDefaultTimeout(60000);
+
     // ── 1. Login ──────────────────────────────────────────────────────────────
     console.log("🔐 Iniciando sesión...");
-    await page.goto(`${BASE_URL}/login.xhtml`, { waitUntil: "networkidle2" });
+    await page.goto(`${BASE_URL}/login.xhtml`, { waitUntil: "domcontentloaded", timeout: 90000 });
 
     const allInputs = await page.$$('input[type="text"], input[type="password"], input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
     console.log(`  Campos en login: ${allInputs.length}`);
@@ -101,18 +105,18 @@ export async function descargarAuditoria({ headless = true } = {}) {
     }
 
     await page.click('button[type="submit"], input[type="submit"]');
-    await page.waitForNavigation({ waitUntil: "networkidle2" });
+    await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 90000 });
     console.log("✅ Login OK");
 
     // ── 2. Ir a Calidad de Salud ──────────────────────────────────────────────
-    await page.goto(`${BASE_URL}/calidad_salud.xhtml?URL_ANTERIOR=calidad_salud`, { waitUntil: "networkidle2" });
-    await sleep(2000);
+    await page.goto(`${BASE_URL}/calidad_salud.xhtml?URL_ANTERIOR=calidad_salud`, { waitUntil: "domcontentloaded", timeout: 90000 });
+    await sleep(3000);
 
     const menuHeaders = await page.$$(".ui-panelmenu-header");
     for (const h of menuHeaders) {
       try { await h.click(); await sleep(600); } catch {}
     }
-    await sleep(1500);
+    await sleep(2000);
 
     // ── 3. Click "Auditoría Hospitalaria" ─────────────────────────────────────
     const clickedMenu = await page.evaluate(() => {
@@ -128,7 +132,7 @@ export async function descargarAuditoria({ headless = true } = {}) {
     if (!clickedMenu) {
       await page.goto(
         `${BASE_URL}/pages/audit/auditoria_hospitalaria/auditoria_hospitalaria.xhtml`,
-        { waitUntil: "networkidle2" }
+        { waitUntil: "domcontentloaded", timeout: 90000 }
       );
     }
     console.log(`✅ Menú: ${clickedMenu || "navegación directa"}`);
