@@ -182,12 +182,12 @@ async function ejecutarAnalitica(chatId) {
 // ── Comandos ──────────────────────────────────────────────────────────────────
 
 bot.command("start", ctx => ctx.reply(
-  "👋 *Asistente Auditoria Hospitalaria — Dusakawi EPSI*\n\n" +
-  "📊 /analitica — Analitica completa del reporte\n" +
-  "🔓 /abiertos — Pacientes con auditoria abierta\n" +
-  "🔍 /cedula 12345 — Evolucion de un paciente\n" +
+  "Bienvenido al sistema de Auditoría Hospitalaria Dusakawi. Selecciona una opción:\n\n" +
+  "📊 /analitica — Analítica completa del reporte\n" +
+  "🔓 /abiertos — Pacientes con auditoría abierta\n" +
+  "🔍 /cedula 12345 — Evolución de un paciente\n" +
   "🗑 /clear — Limpiar historial\n\n" +
-  "🎤 Tambien puedes enviar voz o escribir una cedula directamente.",
+  "🎤 También puedes enviar un mensaje de voz o escribir una cédula directamente.",
   { parse_mode: "Markdown" }
 ));
 
