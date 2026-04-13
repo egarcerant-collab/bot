@@ -343,11 +343,26 @@ cron.schedule("0 18 * * *", () => {
 }, { timezone: "America/Bogota" });
 
 // ── Launch ────────────────────────────────────────────────────────────────────
-bot.launch().then(() => {
+bot.launch().then(async () => {
   console.log("🤖 Bot @concurrencias_dsk_bot iniciado y escuchando...");
   console.log("📅 Descargas programadas: 7:00 AM y 6:00 PM (hora Colombia)");
   if (!ADMIN_CHAT_ID) {
     console.log("⚠️  ADMIN_CHAT_ID no configurado — usa /miid en Telegram para obtener tu ID");
+  }
+
+  // Registrar comandos en el menú de Telegram
+  try {
+    await bot.telegram.setMyCommands([
+      { command: "analitica",  description: "Ver analítica completa del último reporte" },
+      { command: "descargar",  description: "Descargar reporte de auditoría ahora" },
+      { command: "start",      description: "Iniciar el asistente" },
+      { command: "clear",      description: "Limpiar historial de conversación" },
+      { command: "miid",       description: "Ver tu Chat ID" },
+      { command: "help",       description: "Mostrar ayuda" },
+    ]);
+    console.log("✅ Comandos registrados en Telegram");
+  } catch (e) {
+    console.error("⚠️  No se pudieron registrar comandos:", e.message);
   }
 });
 
