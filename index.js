@@ -338,56 +338,40 @@ cron.schedule("0 18 * * *", () => {
 
 // ── Launch ────────────────────────────────────────────────────────────────────
 
-async function iniciarBot() {
-  // Forzar desconexión de cualquier instancia anterior antes de arrancar
-  try {
-    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    console.log("🔌 Instancias anteriores desconectadas");
-  } catch (e) {
-    console.log("⚠️  deleteWebhook:", e.message);
-  }
+// Forzar desconexión de instancia anterior y arrancar
+bot.telegram.deleteWebhook({ drop_pending_updates: true })
+  .catch(() => {})
+  .finally(() => {
+    setTimeout(() => {
+      bot.launch({ dropPendingUpdates: true })
+        .then(async () => {
+          console.log("🤖 Bot @concurrencias_dsk_bot ACTIVO — version nueva");
+          try {
+            await bot.telegram.setMyCommands([
+              { command: "analitica", description: "Analitica del ultimo reporte" },
+              { command: "cedula",    description: "Buscar paciente por cedula" },
+              { command: "descargar", description: "Descargar reporte ahora" },
+              { command: "start",     description: "Iniciar el asistente" },
+              { command: "clear",     description: "Limpiar historial" },
+              { command: "miid",      description: "Ver tu Chat ID" },
+              { command: "help",      description: "Ayuda" },
+            ]);
+            console.log("✅ Comandos registrados");
+          } catch (e) { console.error("setMyCommands:", e.message); }
 
-  // Esperar 3s para asegurar que la instancia vieja murió
-  await new Promise(r => setTimeout(r, 3000));
-
-  await bot.launch({ dropPendingUpdates: true });
-
-  console.log("🤖 Bot @concurrencias_dsk_bot activo — versión NUEVA");
-  console.log("📅 Cron: 7:00 AM y 6:00 PM (Colombia)");
-
-  try {
-    await bot.telegram.setMyCommands([
-      { command: "analitica",  description: "Analitica del ultimo reporte" },
-      { command: "cedula",     description: "Buscar paciente por cedula" },
-      { command: "descargar",  description: "Descargar reporte ahora" },
-      { command: "start",      description: "Iniciar el asistente" },
-      { command: "clear",      description: "Limpiar historial" },
-      { command: "miid",       description: "Ver tu Chat ID" },
-      { command: "help",       description: "Ayuda" },
-    ]);
-    console.log("✅ Comandos registrados en Telegram");
-  } catch (e) {
-    console.error("⚠️  setMyCommands:", e.message);
-  }
-
-  // Notificar al admin que el nuevo bot está activo
-  if (ADMIN_CHAT_ID) {
-    try {
-      await bot.telegram.sendMessage(ADMIN_CHAT_ID,
-        "✅ *Bot actualizado y activo*\n\nComandos disponibles:\n" +
-        "/analitica — Analítica Google Sheet\n" +
-        "/cedula — Buscar paciente\n" +
-        "/descargar — Descargar reporte",
-        { parse_mode: "Markdown" }
-      );
-    } catch (e) { /* sin admin configurado */ }
-  }
-}
-
-iniciarBot().catch(err => {
-  console.error("❌ Error al iniciar bot:", err.message);
-  process.exit(1);
-});
+          if (ADMIN_CHAT_ID) {
+            bot.telegram.sendMessage(ADMIN_CHAT_ID,
+              "✅ *Bot actualizado y activo*\n\n/analitica — Analitica Google Sheet\n/cedula — Buscar paciente\n/descargar — Descargar reporte",
+              { parse_mode: "Markdown" }
+            ).catch(() => {});
+          }
+        })
+        .catch(err => {
+          console.error("❌ Launch error:", err.message);
+          process.exit(1);
+        });
+    }, 5000); // 5s de espera para que muera la instancia vieja
+  });
 
 process.once("SIGINT",  () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
