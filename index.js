@@ -338,7 +338,7 @@ cron.schedule("0 18 * * *", () => {
 
 // ── Launch ────────────────────────────────────────────────────────────────────
 
-bot.launch().then(async () => {
+bot.launch({ dropPendingUpdates: true }).then(async () => {
   console.log("🤖 Bot @concurrencias_dsk_bot activo");
   console.log("📅 Cron: 7:00 AM y 6:00 PM (Colombia)");
 
@@ -360,3 +360,15 @@ bot.launch().then(async () => {
 
 process.once("SIGINT",  () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+
+// Manejo del error 409 — reintentar tras 5s si hay conflicto de instancias
+process.on("unhandledRejection", (err) => {
+  if (err?.response?.error_code === 409) {
+    console.log("⚠️  409 Conflict — esperando 5s para reintentar...");
+    setTimeout(() => {
+      bot.launch({ dropPendingUpdates: true }).catch(() => {});
+    }, 5000);
+  } else {
+    console.error("Unhandled rejection:", err);
+  }
+});
