@@ -183,42 +183,27 @@ async function ejecutarAnalitica(chatId) {
 
 bot.command("start", ctx => ctx.reply(
   "👋 *Asistente Auditoria Hospitalaria — Dusakawi EPSI*\n\n" +
-  "Selecciona un comando:\n\n" +
   "📊 /analitica — Analitica completa del reporte\n" +
   "🔓 /abiertos — Pacientes con auditoria abierta\n" +
   "🔍 /cedula 12345 — Evolucion de un paciente\n" +
-  "⬇️ /descargar — Descargar reporte del sistema\n" +
-  "🗑 /clear — Limpiar historial\n" +
-  "❓ /help — Ayuda\n\n" +
+  "🗑 /clear — Limpiar historial\n\n" +
   "🎤 Tambien puedes enviar voz o escribir una cedula directamente.",
   { parse_mode: "Markdown" }
 ));
 
 bot.command("help", ctx => ctx.reply(
-  "🤖 *Asistente Auditoría Hospitalaria Dusakawi*\n\n" +
-  "• `/analitica` — Lee el Google Sheet actualizado y muestra:\n" +
-  "  – Totales y usuarios únicos\n" +
-  "  – Auditorías abiertas / cerradas\n" +
-  "  – Tipos de internación con %\n" +
-  "  – IPS/sedes con más usuarios\n" +
-  "  – Top diagnósticos\n\n" +
-  "• `/cedula 1067815531` — Evolución completa de un paciente\n\n" +
-  "• `/descargar` — Descarga fresca desde el sistema hospitalario\n\n" +
-  "• 🎤 Voz — Habla y te respondo con voz",
+  "🤖 *Asistente Auditoria Hospitalaria Dusakawi*\n\n" +
+  "/analitica — Analitica completa: totales, abiertos, IPS, diagnosticos\n" +
+  "/abiertos — Lista de pacientes con auditoria abierta por IPS\n" +
+  "/cedula 12345 — Evolucion completa de un paciente\n" +
+  "/clear — Limpiar historial de conversacion\n\n" +
+  "🎤 Voz — Habla y te respondo con voz",
   { parse_mode: "Markdown" }
 ));
 
 bot.command("clear", ctx => {
   histories.delete(ctx.from.id);
-  ctx.reply("✅ Historial limpiado.");
-});
-
-bot.command("miid", ctx =>
-  ctx.reply(`Tu Chat ID es: \`${ctx.chat.id}\``, { parse_mode: "Markdown" })
-);
-
-bot.command("descargar", async ctx => {
-  await ejecutarDescarga(ctx.chat.id);
+  ctx.reply("Historial limpiado.");
 });
 
 bot.command("analitica", async ctx => {
@@ -363,7 +348,6 @@ bot.telegram.deleteWebhook({ drop_pending_updates: true })
               { command: "analitica", description: "Analitica completa del reporte" },
               { command: "abiertos",  description: "Pacientes con auditoria abierta" },
               { command: "cedula",    description: "Evolucion paciente: /cedula 12345" },
-              { command: "descargar", description: "Descargar reporte del sistema" },
               { command: "start",     description: "Menu principal" },
               { command: "clear",     description: "Limpiar historial" },
               { command: "help",      description: "Ayuda" },
